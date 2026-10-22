@@ -20,11 +20,20 @@ func helpAsked(args []string) bool {
 	// Agents page's dry run, a link, Windows' -Embedding) never carries
 	// an exact -h, --help or help
 	for _, a := range args {
+		if a == "--" && accountsRun(args) {
+			break // what follows is Claude Code's own (accountsRunCmd)
+		}
 		if a == "-h" || a == "--help" {
 			return true
 		}
 	}
 	return len(args) > 1 && args[1] == "help"
+}
+
+// accountsRun says args are `magpie accounts run …`, whose arguments after
+// -- go to Claude Code as they are: its --help is Claude Code's.
+func accountsRun(args []string) bool {
+	return len(args) > 1 && (args[0] == "accounts" || args[0] == "account") && args[1] == "run"
 }
 
 // helpFor is what `magpie <command> --help` prints: the command's own
