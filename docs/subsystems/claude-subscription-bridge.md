@@ -24,6 +24,12 @@ in for no agent. It doesn't update itself (the bridge sets
 `DISABLE_AUTOUPDATER`); installing again takes the newest and removes the
 older one.
 
+A run on a saved account shares that account's config directory with a
+Claude Code the user started on it (`magpie accounts run claude`, in
+[Providers and accounts](providers-accounts.md)): one sign-in there, and
+Claude Code's lock in the directory keeps two of them from refreshing it
+at once.
+
 A run is started with `--dangerously-skip-permissions` (`claudeCLIArgs`):
 its only tools are magpie's MCP ones, answered by the client, and
 Anthropic's web search. Claude Code run as root refuses that flag ("cannot
