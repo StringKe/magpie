@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "exportedAt": "2026-11-01T08:12:05Z",
+  "exportedFrom": "wsl",
+  "swapVersion": "0.29.0",
+  "encrypted": false,
+  "activeAccountNumber": 1,
+  "accounts": [
+    {
+      "number": 1,
+      "email": "max@x.com",
+      "uuid": "acct-max",
+      "organizationUuid": "org-max",
+      "organizationName": "max@x.com's Organization",
+      "added": "2026-11-01T08:11:40Z",
+      "credentials": {
+        "claudeAiOauth": {
+          "accessToken": "sk-ant-oat01-acc-max",
+          "refreshToken": "sk-ant-ort01-ref-max",
+          "expiresAt": 1893456000000,
+          "scopes": [
+            "user:inference",
+            "user:profile",
+            "user:sessions:claude_code"
+          ],
+          "subscriptionType": "max",
+          "rateLimitTier": "default_claude_max_20x"
+        }
+      },
+      "config": {
+        "oauthAccount": {
+          "accountUuid": "acct-max",
+          "emailAddress": "max@x.com",
+          "organizationUuid": "org-max",
+          "organizationName": "max@x.com's Organization",
+          "organizationRole": "admin"
+        }
+      }
+    },
+    {
+      "number": 2,
+      "email": "setup-token-2@token.local",
+      "uuid": "",
+      "organizationUuid": "",
+      "organizationName": "",
+      "added": "2026-11-01T08:11:52Z",
+      "credentials": {
+        "claudeAiOauth": {
+          "accessToken": "sk-ant-oat01-setup-two",
+          "scopes": [
+            "user:inference"
+          ]
+        }
+      },
+      "config": {
+        "oauthAccount": {
+          "emailAddress": "setup-token-2@token.local",
+          "accountUuid": "",
+          "organizationUuid": null,
+          "organizationName": null
+        }
+      }
+    },
+    {
+      "number": 3,
+      "email": "ci@x.com",
+      "uuid": "",
+      "organizationUuid": "",
+      "organizationName": "",
+      "added": "2026-11-01T08:12:01Z",
+      "credentials": {
+        "claudeAiOauth": {
+          "accessToken": "sk-ant-oat01-setup-three",
+          "scopes": [
+            "user:inference"
+          ]
+        }
+      },
+      "config": {
+        "oauthAccount": {
+          "emailAddress": "ci@x.com",
+          "accountUuid": "",
+          "organizationUuid": null,
+          "organizationName": null
+        }
+      },
+      "alias": "ci"
+    }
+  ]
+}

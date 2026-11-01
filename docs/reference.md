@@ -2035,7 +2035,23 @@ Anthropic nothing, with its organization, and a cswap alias becomes the
 account's name in magpie when it has none and the name picks no other
 account. Claude Code renews it the first time it runs on it, and the
 file's copy stops working then: remove the account from cswap (`cswap
---remove-account`) rather than switch to it there again.
+--remove-account`) rather than switch to it there again. A cswap
+setup-token account (its token kept with the `user:inference` scope
+alone and no refresh token) comes in as a setup-token account, below,
+named by its cswap alias, else by the email cswap lists it under. A
+setup-token isn't renewed, so cswap's copy keeps working. An access token
+with any other scopes is still refused.
+
+A Claude account can also be added from the long-lived token `claude
+setup-token` prints: *Add an account by setup-token…* under Claude's
+accounts, or `magpie accounts add claude --token <token>`. `--token -`
+reads it from stdin (typed unseen on a terminal), which keeps it out of
+the shell's history. magpie never prints the token back and asks
+Anthropic nothing with it. A setup-token tells no email, plan or
+allowance, so the account is named `Claude setup-token` and six
+characters of the token's hash, and its allowance shows once a reply
+tells it. magpie's requests use it; Claude Code itself can't be signed
+in to it. The same token again is the account that has it.
 
 ### Connecting anything else
 

@@ -151,6 +151,108 @@ func TestImportCswapRefusals(t *testing.T) {
 	}
 }
 
+// StringKe's audit (#4532, 2.3): a cswap export's setup-token accounts
+// were refused as "only an access token". cswap keeps a setup-token
+// (add_account_from_token, `cswap --add-token`) as Claude Code's
+// credential with the token for accessToken, the inference scope alone
+// and no refresh token, under the email given or setup-token-<slot>@token.local.
+// testdata/cswap_0.29.0_setup_token_export.json is that shape as cswap
+// 0.29.0's export_accounts writes it, beside a sign-in. Each setup-token
+// comes in as AddClaudeSetupToken adds one, named by cswap's alias, else
+// by the email cswap shows it under; Anthropic is asked nothing.
+func TestImportCswapSetupTokens(t *testing.T) {
+	claudeHome(t)
+	asked := false
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = true
+		w.WriteHeader(500)
+	}))
+	defer fake.Close()
+	oldBase := claudeBase
+	t.Cleanup(func() { claudeBase = oldBase })
+	claudeBase = fake.URL
+
+	b, err := os.ReadFile("testdata/cswap_0.29.0_setup_token_export.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	two, three := claudeTokenName("sk-ant-oat01-setup-two"), claudeTokenName("sk-ant-oat01-setup-three")
+	rs, err := ImportLogins(context.Background(), "claude", []string{string(b)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := importStatuses(rs), "max@x.com:added,"+two+":added,"+three+":added"; got != want || asked {
+		t.Fatalf("got %s %+v, want %s; asked Anthropic: %v", got, rs, want, asked)
+	}
+	if out, _ := json.Marshal(rs); strings.Contains(string(out), "sk-ant-oat01-setup") {
+		t.Fatalf("the import's answer shows a token: %s", out)
+	}
+	for _, c := range []struct{ token, user, name string }{
+		{"sk-ant-oat01-setup-two", two, "setup-token-2@token.local"},
+		{"sk-ant-oat01-setup-three", three, "ci"},
+	} {
+		var got *Login
+		for _, l := range Logins("claude") {
+			if l.User == c.user {
+				got = &l
+			}
+		}
+		if got == nil || !got.Token || !got.On || got.Active {
+			t.Fatalf("%s listed as %+v, want a setup-token account on beside the others", c.user, got)
+		}
+		if tok := ClaudeDirToken(claudeAccountDir(c.user)); tok != c.token {
+			t.Fatalf("%s's directory is given %q", c.user, tok)
+		}
+		if n := AccountNameOf("claude", c.user); n != c.name {
+			t.Fatalf("%s is named %q, not %q", c.user, n, c.name)
+		}
+	}
+
+	// again: every one is magpie's already, the setup-tokens by the token
+	rs, err = ImportLogins(context.Background(), "claude", []string{string(b)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := importStatuses(rs), "max@x.com:exists,"+two+":exists,"+three+":exists"; got != want || len(Logins("claude")) != 3 {
+		t.Fatalf("again: %s, want %s; %d accounts", got, want, len(Logins("claude")))
+	}
+	// one added by hand first is the same account
+	if user, err := AddClaudeSetupToken("sk-ant-oat01-setup-two"); err != nil || user != two || len(Logins("claude")) != 3 {
+		t.Fatalf("the imported token by hand: %q %v, %d accounts", user, err, len(Logins("claude")))
+	}
+}
+
+// An access token with the sk-ant-oat prefix is an ordinary sign-in's too:
+// only the setup-token's shape, the inference scope alone with no refresh
+// token, is taken for one. Any other scopes, or none said, is still an
+// access token with nothing to renew it. The same shape in Claude Code's
+// own credential file (as cswap keeps each account's) is a setup-token too.
+func TestImportClaudeAccessTokenIsNoSetupToken(t *testing.T) {
+	claudeHome(t)
+	cswap := func(oauth string) string {
+		return `{"version":1,"swapVersion":"0.29.0","encrypted":false,"accounts":[{"number":1,"email":"pro@x.com","uuid":"acct-pro","organizationUuid":"org-pro",` +
+			`"credentials":{"claudeAiOauth":` + oauth + `},"config":{"oauthAccount":{"emailAddress":"pro@x.com","accountUuid":"acct-pro","organizationUuid":"org-pro"}}}]}`
+	}
+	for _, c := range []struct{ name, file string }{
+		{"cswap, Claude Code's scopes", cswap(`{"accessToken":"sk-ant-oat01-acc-pro","expiresAt":1893456000000,"scopes":["user:inference","user:profile","user:sessions:claude_code"]}`)},
+		{"cswap, no scopes", cswap(`{"accessToken":"sk-ant-oat01-acc-pro","expiresAt":1893456000000}`)},
+		{"cswap, inference and profile", cswap(`{"accessToken":"sk-ant-oat01-acc-pro","scopes":["user:inference","user:profile"]}`)},
+		{"credentials, Claude Code's scopes", `{"claudeAiOauth":{"accessToken":"sk-ant-oat01-acc-pro","scopes":["user:inference","user:profile"]}}`},
+	} {
+		rs, err := ImportLogins(context.Background(), "claude", []string{c.file})
+		if err != nil || len(rs) != 1 || rs[0].Status != "failed" || rs[0].Error != accessOnly {
+			t.Fatalf("%s: %+v %v, want refused as only an access token", c.name, rs, err)
+		}
+	}
+	if n := len(readLogins()); n != 0 {
+		t.Fatalf("%d accounts kept from access tokens", n)
+	}
+	rs, err := ImportLogins(context.Background(), "claude", []string{`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-setup-file","scopes":["user:inference"]}}`})
+	if want := claudeTokenName("sk-ant-oat01-setup-file") + ":added"; err != nil || importStatuses(rs) != want {
+		t.Fatalf("a setup-token's credential file: %+v %v, want %s", rs, err, want)
+	}
+}
+
 // cswapWith is the cswap export with each account's expiresAt as given
 // (a missing one taken out).
 func cswapWith(t *testing.T, at map[string]int64) string {

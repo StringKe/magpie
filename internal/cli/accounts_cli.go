@@ -21,7 +21,7 @@ import (
 )
 
 // accountsCmd: `magpie accounts [agent] [--json]`, `magpie accounts add <agent>`,
-// `magpie accounts switch|forget <agent> <email>`, `magpie accounts switch <claude|codex> next`,
+// `magpie accounts add claude --token <token|->`, `magpie accounts switch|forget <agent> <email>`, `magpie accounts switch <claude|codex> next`,
 // `magpie accounts project <gemini|antigravity> <email> <project>`,
 // `magpie accounts alias <agent> <email> [<name>|--clear]`
 // `magpie accounts on|off <agent> <email|name>`
@@ -32,7 +32,7 @@ func accountsCmd(args []string) error {
 	if len(args) > 1 && args[1] == "discovery" {
 		return accountsDiscoveryCmd(args[2:])
 	}
-	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget|on|off copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts on|off <agent|chatgpt-api|<plugin>> <email|name> | magpie accounts switch-only <codex|claude> [on|off]"
+	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add claude --token <token|-> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget|on|off copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts on|off <agent|chatgpt-api|<plugin>> <email|name> | magpie accounts switch-only <codex|claude> [on|off]"
 	agentID := func(s string) (string, error) {
 		switch strings.ToLower(s) {
 		case "claude", "cc":
@@ -128,6 +128,14 @@ func accountsCmd(args []string) error {
 		return checkinWorkBuddy(len(args) > 2 && args[2] == "--json")
 	}
 	if len(args) > 1 && args[1] == "add" {
+		if rest, token, ok := tokenArg(args[2:]); ok {
+			// no word but --token's is echoed: in another order
+			// (--token claude <token>) the token is one of rest
+			if len(rest) != 1 || token == "" || !strings.EqualFold(rest[0], "claude") && !strings.EqualFold(rest[0], "cc") {
+				return fmt.Errorf("usage: magpie accounts add claude --token <token|->: --token adds a Claude account from the token `claude setup-token` prints, the token right after it; another agent's account is signed in to with magpie accounts add <agent>")
+			}
+			return addClaudeToken(token)
+		}
 		// a Copilot account by GitHub's device code, on github.com or an
 		// enterprise's <name>.ghe.com (#723)
 		if len(args) >= 3 && strings.EqualFold(args[2], "copilot") {
@@ -563,6 +571,51 @@ func addAccount(agentID string) error {
 	return fmt.Errorf("sign-in canceled")
 }
 
+// tokenArg takes --token <value> or --token=<value> out of args, and
+// says whether it was there.
+func tokenArg(args []string) (rest []string, token string, ok bool) {
+	for i, a := range args {
+		if v, found := strings.CutPrefix(a, "--token="); found {
+			return slices.Delete(slices.Clone(args), i, i+1), v, true
+		}
+		if a == "--token" {
+			if i+1 == len(args) {
+				return slices.Delete(slices.Clone(args), i, i+1), "", true
+			}
+			return slices.Delete(slices.Clone(args), i, i+2), args[i+1], true
+		}
+	}
+	return args, "", false
+}
+
+// addClaudeToken adds a Claude account from a setup-token, as the window's
+// "Add an account by setup-token…" does; "-" reads it from stdin, typed
+// unseen on a terminal. The token is never printed.
+func addClaudeToken(token string) error {
+	if token == "-" {
+		var err error
+		if token, err = secret("setup-token", "Paste the token `claude setup-token` printed: ", false); err != nil {
+			return err
+		}
+	}
+	had := map[string]bool{}
+	for _, l := range provider.Logins("claude") {
+		had[l.User] = true
+	}
+	fmt.Println(bold.Render("!"), provider.ClaudeRisk)
+	user, err := provider.AddClaudeSetupToken(token)
+	if err != nil {
+		return err
+	}
+	if had[user] {
+		fmt.Println(muted.Render("="), user, muted.Render("· in magpie already with this setup-token, left as it is"))
+		return nil
+	}
+	defer sayStillOff("claude")
+	fmt.Println(green.Render("✓"), "added", user, muted.Render("· magpie's requests use it; Claude Code itself can't be signed in to it · name it: magpie accounts alias claude \""+user+"\" <name>"))
+	return nil
+}
+
 // importUsage is how `magpie accounts import` is run.
 const importUsage = "usage: magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]"
 
@@ -629,7 +682,7 @@ func importAccounts(args []string) error {
 			"The files are only read, never changed. An account magpie holds already is left as it is."}
 	case "claude":
 		say = []string{provider.ClaudeRisk,
-			"Each account is kept as the file has it. Claude Code renews its sign-in the first time it uses it, and the file's copy then stops working: the tool it came from has to sign in again.",
+			"Each account is kept as the file has it. Claude Code renews a sign-in the first time it uses it, and the file's copy then stops working: the tool it came from has to sign in again. A setup-token isn't renewed, and keeps working there too.",
 			"The files are only read, never changed."}
 	case "antigravity":
 		say = []string{provider.AntigravityRisk, "Each account's sign-in is refreshed with Google before it is added."}

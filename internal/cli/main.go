@@ -94,9 +94,10 @@ const usage = `magpie — one place to pick every agent's model
   magpie group <id> | set <id> k=v… | rm <id>   show, change or remove one (magpie group help for more)
   magpie accounts [agent] [--json]  every subscription magpie knows, with each one's allowance used and when it resets
   magpie accounts add <agent>     sign in to one more Claude, ChatGPT or Google (Gemini CLI, Antigravity) subscription
+  magpie accounts add claude --token <token|->   one more Claude account from the token claude setup-token prints ("-" reads it from stdin); never printed back
   magpie accounts add copilot [--host <name>.ghe.com]   one more Copilot account, on github.com or an enterprise's GHE.com
   magpie accounts discovery [on|off]   read agents' sign-ins (default on; MAGPIE_NO_ACCOUNTS=1 disables too)
-  magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]   bring in accounts from other tools' files (Codex's auth.json, Cockpit Tools, CLIProxyAPI, Sub2API, claude-swap); the tool a ChatGPT or Claude file came from is signed out of it
+  magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes]   bring in accounts from other tools' files (Codex's auth.json, Cockpit Tools, CLIProxyAPI, Sub2API, claude-swap, its setup-tokens too); the tool a ChatGPT or Claude file came from is signed out of it
   magpie accounts switch <agent> <email|name>   sign the agent in to another of them, by its email or the name you gave it
   magpie accounts switch <claude|codex> next   to the next account in order with room, or the one with the most left
   magpie accounts on|off <agent|chatgpt-api> <email|name>   tick or untick one account: on, it takes requests and the automatic switch moves to it; the order and the account signed in stay

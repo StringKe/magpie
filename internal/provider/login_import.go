@@ -23,7 +23,9 @@ package provider
 // so the file it came from stops working: the account is magpie's from then
 // on, as a sign-in in magpie would make it. A Claude one is kept as it
 // came, magpie asking Anthropic nothing; Claude Code refreshes it the first
-// time it runs on it. Tokens are never logged or sent back.
+// time it runs on it. A Claude setup-token kept in a sign-in's shape
+// (cswap's) is added as AddClaudeSetupToken adds one. Tokens are never
+// logged or sent back.
 
 import (
 	"cmp"
@@ -31,6 +33,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +58,26 @@ type loginImport struct {
 	// milliseconds, 0 when it doesn't say: a refresh gives a later one,
 	// so it tells which of two sign-ins of one account is the newer
 	expiresAt int64
+	// setupToken is a Claude setup-token the file keeps where a sign-in's
+	// access token goes (claudeSetupTokenEntry)
+	setupToken string
+}
+
+// claudeSetupTokenEntry takes e, a Claude entry refused as accessOnly, for
+// a setup-token when it has the shape claude-swap keeps one in
+// (add_account_from_token): the token as Claude Code's access token, with
+// the inference scope alone and no refresh token. The sk-ant-oat prefix
+// alone doesn't tell: a sign-in's access token has it too.
+func claudeSetupTokenEntry(e *loginImport) {
+	if e.err != accessOnly || e.accessToken == "" || !slices.Equal(e.scopes, []string{"user:inference"}) {
+		return
+	}
+	tok, err := checkClaudeSetupToken(e.accessToken)
+	if err != nil {
+		e.err = err.Error()
+		return
+	}
+	e.err, e.setupToken = "", tok
 }
 
 // jsonMillis is the number under key, 0 when there is none.
@@ -182,6 +205,9 @@ func loginEntry(agent string, x map[string]any) loginImport {
 	case e.refreshToken == "" && (e.accessToken != "" || jsonStr(x, "personal_access_token") != ""):
 		e.err = accessOnly
 	}
+	if agent == "claude" {
+		claudeSetupTokenEntry(&e)
+	}
 	return e
 }
 
@@ -191,7 +217,10 @@ func loginEntry(agent string, x map[string]any) loginImport {
 // own ({claudeAiOauth: {…}}), or with --full whatever else it kept beside
 // it; config is {oauthAccount: {…}}, or with --full all of ~/.claude.json.
 // An API-key account's credentials are the sk-ant-… key, its kind
-// "api_key".
+// "api_key". A setup-token account's are the token as claudeAiOauth's
+// accessToken with scopes ["user:inference"], under the email given or
+// setup-token-<number>@token.local; it is named so in magpie, as cswap
+// lists it, unless it has an alias.
 func cswapEntry(agent string, x map[string]any) loginImport {
 	cfg, _ := x["config"].(map[string]any)
 	acct, _ := cfg["oauthAccount"].(map[string]any)
@@ -219,6 +248,9 @@ func cswapEntry(agent string, x map[string]any) loginImport {
 	e.expiresAt = jsonMillis(src, "expiresAt")
 	if e.refreshToken == "" && e.accessToken != "" {
 		e.err = accessOnly
+	}
+	if claudeSetupTokenEntry(&e); e.setupToken != "" {
+		e.alias = cmp.Or(e.alias, e.email)
 	}
 	return e
 }
@@ -360,7 +392,8 @@ func ImportLogins(ctx context.Context, agent string, files []string) ([]Imported
 	if len(all) > maxGoogleImport {
 		return nil, fmt.Errorf("%d accounts; at most %d at a time", len(all), maxGoogleImport)
 	}
-	// the refresh tokens magpie holds already, the agent's own included
+	// the refresh tokens and setup-tokens magpie holds already, the agent's
+	// own included
 	have := map[string]string{}
 	loginsMu.Lock()
 	ls := readLogins()
@@ -373,7 +406,7 @@ func ImportLogins(ctx context.Context, agent string, files []string) ([]Imported
 			continue
 		}
 		kept = append(kept, l)
-		if t := loginRefreshToken(l); t != "" {
+		if t := cmp.Or(loginRefreshToken(l), claudeSetupToken(l.Auth)); t != "" {
 			have[t] = l.User
 		}
 	}
@@ -388,21 +421,22 @@ func ImportLogins(ctx context.Context, agent string, files []string) ([]Imported
 		if name == "" && e.file == 0 {
 			name = fmt.Sprintf("#%d", i+1)
 		}
+		token := cmp.Or(e.setupToken, e.refreshToken)
 		switch {
 		case e.err != "":
 			out[i] = ImportedAccount{User: name, File: e.file, Status: "failed", Error: e.err}
 			continue
-		case e.refreshToken == "":
+		case token == "":
 			out[i] = ImportedAccount{User: name, Status: "failed", Error: "no refresh_token in it"}
 			continue
-		case have[e.refreshToken] != "":
-			out[i] = ImportedAccount{User: have[e.refreshToken], Status: "exists"}
+		case have[token] != "":
+			out[i] = ImportedAccount{User: have[token], Status: "exists"}
 			continue
-		case seen[e.refreshToken]:
+		case seen[token]:
 			out[i] = ImportedAccount{User: name, Status: "failed", Error: "in the files twice"}
 			continue
 		}
-		seen[e.refreshToken] = true
+		seen[token] = true
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -530,6 +564,16 @@ func importLogin(ctx context.Context, agent string, e loginImport, name string, 
 		}
 		l, err = codexLogin(id, str("access_token"), str("refresh_token"), e.accountID)
 	case "claude":
+		if e.setupToken != "" {
+			user, added, err := addClaudeSetupToken(e.setupToken)
+			if err != nil {
+				return fail(err.Error())
+			}
+			if !added {
+				return ImportedAccount{User: user, Status: "exists"}
+			}
+			return ImportedAccount{User: user, Status: "added"}
+		}
 		scopes := e.scopes
 		if len(scopes) == 0 {
 			scopes = claudeImportScopes
