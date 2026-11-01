@@ -99,23 +99,31 @@ func AddClaudeSetupToken(token string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	user, _, err := addClaudeSetupToken(token)
+	return user, err
+}
+
+// addClaudeSetupToken keeps token, checked by checkClaudeSetupToken, as a
+// Claude account, and says whether it was added: a token already saved
+// answers the account that has it.
+func addClaudeSetupToken(token string) (user string, added bool, err error) {
 	loginsMu.Lock()
 	for _, l := range readLogins() {
 		if l.Agent == "claude" && claudeSetupToken(l.Auth) == token {
 			loginsMu.Unlock()
-			return l.User, nil
+			return l.User, false, nil
 		}
 	}
 	loginsMu.Unlock()
 	auth, err := json.Marshal(claudeTokenAuth{SetupToken: token})
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	l := savedLogin{Agent: "claude", User: claudeTokenName(token), Auth: auth}
 	if _, err := addLogin(l); err != nil {
-		return "", err
+		return "", false, err
 	}
-	return l.User, nil
+	return l.User, true, nil
 }
 
 // ClaudeDirToken is the setup-token of the saved Claude account whose
