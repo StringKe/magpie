@@ -314,7 +314,18 @@ func claudeSavedDir(user string) (string, error) {
 // l has. has says the directory holds a sign-in to run on; changed, that l
 // changed.
 func syncClaudeDir(l *savedLogin) (has, changed bool, err error) {
-	c, ok := readClaudeDir(claudeAccountDir(l.User))
+	dir := claudeAccountDir(l.User)
+	c, ok := readClaudeDir(dir)
+	if saved, parsed := parseClaudeCredentials(l.Auth); ok && parsed && claudeLater(saved, c) {
+		// the later expiresAt is taken as the live sign-in. Within one
+		// refresh-token chain the older is the one a refresh spent (Claude
+		// Code refreshed the account elsewhere, signed in to it by another
+		// tool and out again), so the next run starts from the saved one
+		// (claudeSavedDir) rather than this being taken over it (StringKe,
+		// #4532)
+		clearClaudeDir(dir)
+		return false, false, nil
+	}
 	switch {
 	case ok:
 		changed, err = takeClaudeDir(l, c)
@@ -323,6 +334,22 @@ func syncClaudeDir(l *savedLogin) (has, changed bool, err error) {
 		return false, refuseClaudeLogin(l, claudeLoginVersion(*l)), nil
 	}
 	return false, false, nil
+}
+
+// claudeLater says sign-in a is a later one than b: each refresh gives a
+// later expiresAt. An imported sign-in has expiresAt 1 (importLogin), so
+// the one Claude Code refreshes it to is later.
+func claudeLater(a, b claudeCredentials) bool { return a.OAuth.ExpiresAt > b.OAuth.ExpiresAt }
+
+// claudeLaterSignIn is claudeLater of two saved sign-ins; a that doesn't
+// parse is no later.
+func claudeLaterSignIn(a, b []byte) bool {
+	ca, ok := parseClaudeCredentials(a)
+	if !ok {
+		return false
+	}
+	cb, _ := parseClaudeCredentials(b)
+	return claudeLater(ca, cb)
 }
 
 // takeClaudeDir puts the sign-in Claude Code keeps in an account's config

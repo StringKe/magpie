@@ -1266,10 +1266,13 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 		if err != nil {
 			return "", err
 		}
-		if why := claudeSignedOut(*target); why != "" {
-			if changed {
-				_ = writeLogins(ls)
+		if changed {
+			// kept before the folder it came from is forgotten below
+			if err := writeLogins(ls); err != nil {
+				return "", err
 			}
+		}
+		if why := claudeSignedOut(*target); why != "" {
 			return "", fmt.Errorf("%s: %s", target.User, why)
 		}
 	}
@@ -1293,10 +1296,25 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 		// so for Codex's keychain item, which Codex may have refreshed
 		forgetCodexKeychain()
 	}
-	if live, ok := liveLogin(agent); ok {
-		if strings.EqualFold(live.User, want.User) {
+	live, ok := liveLogin(agent)
+	if ok && strings.EqualFold(live.User, want.User) {
+		if agent != "claude" {
 			return "", nil
 		}
+		if !claudeLaterSignIn(want.Auth, live.Auth) {
+			// on it already, put there by another tool (cswap) or by a
+			// switch that failed half way: the account's folder is a
+			// second holder of the sign-in Claude Code has (StringKe, #4532)
+			if _, err := os.Stat(claudeAccountDir(want.User)); err == nil {
+				forgetClaudeDir(want.User)
+				claudeHandedOver(want.User)
+				forgetAccountCaches()
+			}
+			return "", nil
+		}
+		// on it with an older sign-in than magpie's, spent by the refresh
+		// that gave magpie's: magpie's is put in below
+	} else if ok {
 		from = live.User
 		// the credentials being replaced, as fresh as the agent has them;
 		// in use still if the one taking over was: it is next in line now
@@ -1335,7 +1353,11 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 }
 
 // putClaudeLogin signs Claude Code in to l. The caller holds Claude Code's
-// refresh locks (claudeRefreshLocks).
+// refresh locks (claudeRefreshLocks). It either signs Claude Code in to l,
+// profile and all, or leaves it on the sign-in it had: a switch that wrote
+// the sign-in and then failed on ~/.claude.json left the account's refresh
+// token with Claude Code and in the account's folder at once, under a
+// profile naming the account before (StringKe, #4532).
 func putClaudeLogin(l savedLogin) error {
 	if claudeSetupToken(l.Auth) != "" {
 		return fmt.Errorf(errClaudeTokenSwitch, l.User)
@@ -1344,7 +1366,35 @@ func putClaudeLogin(l savedLogin) error {
 	if !ok {
 		return errors.New("the saved Claude Code sign-in is unreadable")
 	}
-	_, loc, found := readClaudeCredential()
+	var profile []byte
+	if len(l.Profile) > 0 {
+		d := json.NewDecoder(bytes.NewReader(l.Profile))
+		d.UseNumber()
+		var acct map[string]any
+		if err := d.Decode(&acct); err != nil {
+			return err
+		}
+		// read and written back under the lock Claude Code saves the file
+		// under, or a save of its own between the two is lost; read before
+		// the sign-in is written, so one that can't be read changes nothing
+		release, err := claudeConfigLock()
+		if err != nil {
+			return err
+		}
+		defer release()
+		m, err := readClaudeProfile()
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			m = map[string]any{}
+		}
+		m["oauthAccount"] = acct
+		if profile, err = json.MarshalIndent(m, "", "  "); err != nil {
+			return err
+		}
+	}
+	old, loc, found := readClaudeCredential()
 	if !found {
 		// signed out: put it where Claude Code keeps it on this system
 		dir := appdir.ClaudeDir()
@@ -1359,35 +1409,25 @@ func putClaudeLogin(l savedLogin) error {
 	if err := saveClaudeCredential(loc, c); err != nil {
 		return err
 	}
-	if len(l.Profile) == 0 {
+	if profile == nil {
 		return nil
 	}
-	// read and written back under the lock Claude Code saves the file
-	// under, or a save of its own between the two is lost
-	release, err := claudeConfigLock()
-	if err != nil {
-		return err
+	err := writePrivate(claudeProfilePath(), append(profile, '\n'))
+	if err == nil {
+		return nil
 	}
-	defer release()
-	m, err := readClaudeProfile()
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		m = map[string]any{}
+	var undo error
+	if old.raw != nil {
+		undo = saveClaudeCredential(loc, old)
+	} else {
+		undo = removeClaudeCredential(loc)
 	}
-	d := json.NewDecoder(bytes.NewReader(l.Profile))
-	d.UseNumber()
-	var acct map[string]any
-	if err := d.Decode(&acct); err != nil {
-		return err
+	if undo != nil {
+		// Claude Code is on l's sign-in still: a switch tried again finds
+		// it there and hands the account's folder over
+		return fmt.Errorf("%w; Claude Code is left on %s's sign-in, as putting back the one it had failed: %v", err, l.User, undo)
 	}
-	m["oauthAccount"] = acct
-	b, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writePrivate(claudeProfilePath(), append(b, '\n'))
+	return err
 }
 
 // ForgetLogin drops a remembered account. The one an agent is signed in to
