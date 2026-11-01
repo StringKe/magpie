@@ -818,13 +818,22 @@ func askClaudeStatus() (user, plan string, signedOut, ok bool) {
 func withoutClaudeWiring(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		switch k, _, _ := strings.Cut(kv, "="); k {
-		case "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN":
+		if k, _, _ := strings.Cut(kv, "="); claudeWiring(k) {
 			continue
 		}
 		out = append(out, kv)
 	}
 	return out
+}
+
+// claudeWiring says the variable k points Claude Code at another endpoint
+// or token than its own sign-in.
+func claudeWiring(k string) bool {
+	switch k {
+	case "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN":
+		return true
+	}
+	return false
 }
 
 func claudeAccount() (Provider, bool) {

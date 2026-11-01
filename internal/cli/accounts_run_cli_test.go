@@ -31,6 +31,7 @@ fi
   printf 'dir=%s\n' "$CLAUDE_CONFIG_DIR"
   printf 'cwd=%s\n' "$(pwd -P)"
   printf 'key=%s\n' "${ANTHROPIC_API_KEY-unset}"
+  printf 'token=%s\n' "${CLAUDE_CODE_OAUTH_TOKEN-unset}"
   printf 'nested=%s\n' "${CLAUDECODE-unset}"
   printf 'proxy=%s\n' "${HTTPS_PROXY-unset}"
   printf 'update=%s\n' "${DISABLE_AUTOUPDATER-unset}"
@@ -124,7 +125,8 @@ func TestAccountsRunClaude(t *testing.T) {
 		}
 		logins := `[
   {"agent": "claude", "user": "other@example.com", "seen": "2026-10-20T10:00:00Z", "auth": ` + auth("old") + `, "profile": {"emailAddress": "other@example.com"}},
-  {"agent": "claude", "user": "gone@example.com", "seen": "2026-10-20T10:00:00Z", "auth": {}}`
+  {"agent": "claude", "user": "gone@example.com", "seen": "2026-10-20T10:00:00Z", "auth": {}},
+  {"agent": "claude", "user": "Claude setup-token 1a2b3c", "seen": "2026-10-20T10:00:00Z", "auth": {"setupToken": "sk-ant-oat01-setup"}}`
 		if own {
 			logins += `,
   {"agent": "claude", "user": "own@example.com", "seen": "2026-10-20T10:00:00Z", "held": true, "auth": ` + auth("own") + `}`
@@ -162,14 +164,14 @@ func TestAccountsRunClaude(t *testing.T) {
 		if err := os.Mkdir(work, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		out, code := runInChild(t, home, true, []string{"ANTHROPIC_API_KEY=sk-ant-api03-not-this", "CLAUDECODE=1"},
+		out, code := runInChild(t, home, true, []string{"ANTHROPIC_API_KEY=sk-ant-api03-not-this", "CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-not-this", "CLAUDECODE=1"},
 			"claude", "other@example.com", "--cwd", work, "--", "-p", "two words", "--help")
 		if code != 7 {
 			t.Fatalf("exit %d, want Claude Code's 7: %s", code, out)
 		}
 		real, _ := filepath.EvalSymlinks(work)
 		dir := claudeAccountDirOf(config, "other@example.com")
-		want := "dir=" + dir + "\ncwd=" + real + "\nkey=unset\nnested=unset\nproxy=unset\nupdate=unset\narg=-p\narg=two words\narg=--help\n"
+		want := "dir=" + dir + "\ncwd=" + real + "\nkey=unset\ntoken=unset\nnested=unset\nproxy=unset\nupdate=unset\narg=-p\narg=two words\narg=--help\n"
 		if got := ran(t, home); got != want {
 			t.Fatalf("Claude Code was run with\n%s\nwant\n%s\n(magpie said %s)", got, want, out)
 		}
@@ -207,6 +209,23 @@ func TestAccountsRunClaude(t *testing.T) {
 		}
 	})
 
+	t.Run("a setup-token account", func(t *testing.T) {
+		home, config := setup(t, false)
+		// its directory holds no sign-in: Claude Code is given the token
+		// in its environment, as the gateway's runs on it are
+		out, code := runInChild(t, home, true, []string{"CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-not-this"}, "claude", "Claude setup-token 1a2b3c")
+		if code != 7 {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+		got := ran(t, home)
+		if !strings.HasPrefix(got, "dir="+claudeAccountDirOf(config, "Claude setup-token 1a2b3c")+"\n") || !strings.Contains(got, "\ntoken=sk-ant-oat01-setup\n") {
+			t.Fatalf("Claude Code was run with\n%s", got)
+		}
+		if strings.Contains(out, "sk-ant-oat01-setup") {
+			t.Fatalf("magpie printed the token: %s", out)
+		}
+	})
+
 	t.Run("through the account's proxy", func(t *testing.T) {
 		home, config := setup(t, false)
 		// as the gateway's runs on the account go (#1807)
@@ -231,6 +250,66 @@ func TestAccountsRunClaude(t *testing.T) {
 		}
 		if got := ran(t, home); !strings.HasPrefix(got, "dir="+claudeAccountDirOf(config, "other@example.com")+"\n") || !strings.Contains(got, "\nupdate=1\n") {
 			t.Fatalf("Claude Code was run with\n%s", got)
+		}
+	})
+
+	t.Run("brings your Claude Code setup", func(t *testing.T) {
+		home, config := setup(t, false)
+		claude := filepath.Join(home, ".claude")
+		for path, body := range map[string]string{
+			"CLAUDE.md":              "my rules\n",
+			"skills/review/SKILL.md": "---\nname: review\n---\n",
+			"commands/ship.md":       "ship it\n",
+			"agents/helper.md":       "---\nname: helper\n---\n",
+			"rules/go.md":            "gofmt\n",
+			"keybindings.json":       `{"bindings": []}`,
+			"history.jsonl":          "{}\n",
+			"projects/-work/x.jsonl": "{}\n",
+			// connected: magpie's gateway and key, beside the user's own
+			"settings.json": `{"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:8080", "ANTHROPIC_AUTH_TOKEN": "magpie-key", "MY_FLAG": "1"}, "permissions": {"allow": ["Bash(ls)"]}}`,
+			".claude.json":  `{"oauthAccount": {"emailAddress": "own@example.com"}, "mcpServers": {"fs": {"command": "fs-mcp"}}}`,
+		} {
+			p := filepath.Join(claude, filepath.FromSlash(path))
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, code := runInChild(t, home, true, nil, "claude", "other@example.com"); code != 7 {
+			t.Fatalf("exit %d: %s", code, out)
+		}
+		dir := claudeAccountDirOf(config, "other@example.com")
+		for _, n := range []string{"CLAUDE.md", "skills", "commands", "agents", "rules"} {
+			got, err := os.Readlink(filepath.Join(dir, n))
+			real, _ := filepath.EvalSymlinks(filepath.Join(claude, n))
+			if err != nil || got != real {
+				t.Errorf("%s in the account's folder: %q (%v), want a link to %s", n, got, err, real)
+			}
+		}
+		for _, n := range []string{"keybindings.json", "history.jsonl", "projects"} {
+			if _, err := os.Lstat(filepath.Join(dir, n)); !os.IsNotExist(err) {
+				t.Errorf("%s went in the account's folder: %v", n, err)
+			}
+		}
+		var settings struct {
+			Env         map[string]string `json:"env"`
+			Permissions any               `json:"permissions"`
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+		if err != nil || json.Unmarshal(b, &settings) != nil || len(settings.Env) != 1 || settings.Env["MY_FLAG"] != "1" || settings.Permissions == nil {
+			t.Errorf("settings.json in the account's folder: %s (%v), want the user's without magpie's gateway", b, err)
+		}
+		var profile struct {
+			Account struct {
+				Email string `json:"emailAddress"`
+			} `json:"oauthAccount"`
+			MCP map[string]any `json:"mcpServers"`
+		}
+		b, err = os.ReadFile(filepath.Join(dir, ".claude.json"))
+		if err != nil || json.Unmarshal(b, &profile) != nil || profile.Account.Email != "other@example.com" || profile.MCP["fs"] == nil {
+			t.Errorf(".claude.json in the account's folder: %s (%v), want the account's with the user's MCP servers", b, err)
 		}
 	})
 
