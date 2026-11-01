@@ -1878,7 +1878,14 @@ room left when none has. It takes accounts that aren't ticked too, as
 *Use* and `switch <email|name>` do, so an account Claude Code or Codex
 signed itself in to (which starts unticked) is in the rotation; the
 ticks still decide where the gateway's requests go and which accounts
-the automatic switch moves to. Once the account it moved the
+the automatic switch moves to. `magpie accounts on <agent> <email|name>`
+ticks one account from the command line, and `off` unticks it, as its
+tick does in the window: the accounts' order and the account the agent is
+signed in to stay as they are (`provider pool --accounts` sets the order
+and switches too). Off on the account the agent is signed in to pauses
+it while another is on (Codex, Claude Code); a subscription magpie
+lists itself (Copilot, ChatGPT API as `chatgpt-api`, Gemini CLI, a plugin's) refuses off on the
+account magpie uses first. Once the account magpie moved the
 agent off has every window under 90% again, it signs the agent back in to
 it. *Keep … signed in to* turns this off: the agent stays on the first
 account, or on the account you picked, whatever it has left. It changes nothing in the gateway's routing.
@@ -2488,8 +2495,8 @@ providers.json; the vendor's or plugin's sign-in is never written to. It
 shows on the account's Usage card, in the menu bar, in `magpie accounts`,
 `magpie quota` and `GET /v1/magpie/quotas` (`alias`). The name picks the
 account wherever its email does: `magpie accounts switch claude Work`,
-`forget`, `alias`, `provider pool <id> --accounts` and `provider
-account-cap`. magpie refuses a name two accounts have, or one that is
+`forget`, `alias`, `on`, `off`, `provider pool <id> --accounts` and
+`provider account-cap`. magpie refuses a name two accounts have, or one that is
 another account's email, rather than pick one by guess; `next` after
 `switch` is always the next account (see above). A GLM Coding Plan
 seat added both as a key and as a signed-in ZCode account is shown once, on
