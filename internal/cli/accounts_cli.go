@@ -24,6 +24,7 @@ import (
 // `magpie accounts switch|forget <agent> <email>`, `magpie accounts switch <claude|codex> next`,
 // `magpie accounts project <gemini|antigravity> <email> <project>`,
 // `magpie accounts alias <agent> <email> [<name>|--clear]`
+// `magpie accounts on|off <agent> <email|name>`
 // `magpie accounts switch-only <codex|claude> [on|off]`
 // — the subscriptions magpie remembers, how much of each one's allowance is
 // used, and switching the agent between them.
@@ -31,7 +32,7 @@ func accountsCmd(args []string) error {
 	if len(args) > 1 && args[1] == "discovery" {
 		return accountsDiscoveryCmd(args[2:])
 	}
-	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts switch-only <codex|claude> [on|off]"
+	const usage = "usage: magpie accounts [claude|codex|grok|copilot|gemini|antigravity|zed|factory|mimo|<plugin>] [--json] | magpie accounts add <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> | magpie accounts add copilot [--host <name>.ghe.com] | magpie accounts import <codex|claude|antigravity|factory> <file>... [--yes] | magpie accounts refresh [--json] | magpie accounts checkin [--json] | magpie accounts switch|forget <claude|codex|gemini|antigravity|zed|factory|mimo|<plugin>> <email> | magpie accounts switch <claude|codex> next | magpie accounts switch|forget|on|off copilot <login>[@<name>.ghe.com] [--host <name>.ghe.com] | magpie accounts project <gemini|antigravity> <email> <gcp-project-id> | magpie accounts alias <agent|<plugin>> <email> [<name>|--clear] | magpie accounts on|off <agent|chatgpt-api|<plugin>> <email|name> | magpie accounts switch-only <codex|claude> [on|off]"
 	agentID := func(s string) (string, error) {
 		switch strings.ToLower(s) {
 		case "claude", "cc":
@@ -157,7 +158,7 @@ func accountsCmd(args []string) error {
 		}
 		return addAccount(id)
 	}
-	if len(args) > 1 && (args[1] == "switch" || args[1] == "forget") {
+	if len(args) > 1 && (args[1] == "switch" || args[1] == "forget" || args[1] == "on" || args[1] == "off") {
 		// a Copilot account's host, for a login on more than one (#1220)
 		host, hasHost := "", false
 		for i := 2; i < len(args); i++ {
@@ -175,8 +176,14 @@ func accountsCmd(args []string) error {
 		if len(args) != 4 {
 			return fmt.Errorf("%s", usage)
 		}
-		id, err := agentID(args[2])
-		if err != nil {
+		var id string
+		var err error
+		if (args[1] == "on" || args[1] == "off") && strings.EqualFold(args[2], provider.ChatGPTAPIID) {
+			// ChatGPT API's accounts have an On (setSIWCLoginOn). Only
+			// on|off takes it: its forget revokes the sign-in in a
+			// goroutine the CLI would exit before
+			id = provider.ChatGPTAPIID
+		} else if id, err = agentID(args[2]); err != nil {
 			return err
 		}
 		if hasHost {
@@ -202,6 +209,9 @@ func accountsCmd(args []string) error {
 		}
 		if over {
 			fmt.Println(muted.Render("every other account is past its line; " + args[3] + " has the most room left"))
+		}
+		if args[1] == "on" || args[1] == "off" {
+			return setAccountOn(id, args[3], args[1] == "on")
 		}
 		if args[1] == "forget" {
 			moved, err := agent.Reseat(func() error { return provider.ForgetLogin(id, args[3]) })
@@ -306,7 +316,7 @@ func accountsCmd(args []string) error {
 		line += quotaReadingCell(r.AsOf, r.ReadAt, r.Windows)
 		fmt.Println(line)
 	}
-	fmt.Println(faint.Render("  ● signed in · ○ takes over when it runs out · add one: magpie accounts add <agent> · switch: magpie accounts switch <agent> <email>"))
+	fmt.Println(faint.Render("  ● signed in · ○ takes over when it runs out (magpie accounts on|off <agent> <email>) · add one: magpie accounts add <agent> · switch: magpie accounts switch <agent> <email>"))
 	return nil
 }
 
@@ -905,10 +915,42 @@ func accountNamed(agent, user string) (string, error) {
 		return "", fmt.Errorf("copilot has %d accounts of %s: %q — name one in full (<login>@<name>.ghe.com) or add --host <name>.ghe.com", len(same), user, same)
 	case len(same) > 1:
 		return "", fmt.Errorf("%s has %d accounts of %s: %q — name one in full", agent, len(same), user, same)
+	case len(names) == 0 && agent == provider.ChatGPTAPIID:
+		// signed in from the window only: accounts add doesn't take it
+		return "", fmt.Errorf("no saved %s accounts · sign in to one in magpie's window", agent)
 	case len(names) == 0:
 		return "", fmt.Errorf("no saved %s accounts · add one: magpie accounts add %s", agent, agent)
 	}
 	return "", fmt.Errorf("no saved %s account %q · its accounts: %q", agent, user, names)
+}
+
+// setAccountOn is `magpie accounts on|off <agent> <email|name>`, one
+// account's tick (#4532): the accounts' order and the agent's sign-in stay
+// as they are, unlike provider pool --accounts. Off on the account the
+// agent is signed in to pauses it.
+func setAccountOn(id, user string, on bool) error {
+	moved, err := agent.Reseat(func() error { return provider.SetLoginOn(id, user, on) })
+	if err != nil {
+		return err
+	}
+	agent.SyncCatalogSoon()
+	var now provider.Login
+	ls := provider.Logins(id)
+	if i := slices.IndexFunc(ls, func(l provider.Login) bool { return strings.EqualFold(l.User, user) }); i >= 0 {
+		now = ls[i]
+	}
+	switch {
+	case now.Active && now.Paused:
+		fmt.Println(green.Render("✓"), user, "is paused", muted.Render("· "+id+" stays signed in to it, and its requests go to the other accounts that are on"))
+	case now.Active:
+		fmt.Println(green.Render("✓"), user, "is on", muted.Render("· it is the account in use"))
+	case on:
+		fmt.Println(green.Render("✓"), user, "is on", muted.Render("· it takes over when the account in use runs out"))
+	default:
+		fmt.Println(green.Render("✓"), user, "is off", muted.Render("· magpie no longer uses it beside the account in use"))
+	}
+	printMoved(moved)
+	return nil
 }
 
 // switchOnlyCmd is `magpie accounts switch-only <codex|claude> [on|off]`:

@@ -56,6 +56,15 @@ func TestAccountsOfAPlugin(t *testing.T) {
 		t.Fatalf("magpie accounts fakeco = %+v", rows)
 	}
 	second := rows[1].User
+	// one account off and on again, the first and the order left (#4532)
+	for _, word := range []string{"off", "on"} {
+		if _, err := said(t, func() error { return accountsCmd([]string{"accounts", word, "fakeco", second}) }); err != nil {
+			t.Fatalf("accounts %s fakeco: %v", word, err)
+		}
+		if got := list(); len(got) != 2 || !got[0].Active || got[0].User != rows[0].User || got[1].User != second || got[1].On != (word == "on") {
+			t.Fatalf("after accounts %s fakeco %s: %+v", word, second, got)
+		}
+	}
 	if _, err := said(t, func() error { return accountsCmd([]string{"accounts", "switch", "fakeco", second}) }); err != nil {
 		t.Fatal(err)
 	}
