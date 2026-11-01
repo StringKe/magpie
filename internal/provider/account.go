@@ -649,6 +649,25 @@ func forgetClaudeCredential() {
 	claudeAskMu.Unlock()
 }
 
+// forgetClaudeRead drops the cached read of Claude Code's sign-in, so the
+// next one asks again, and says whether it did. A failed read while a
+// Keychain read may have shown a dialog (keychainDeniedTTL) is kept, as
+// claudeCredential keeps it: asked again, the dialog can show again.
+func forgetClaudeRead() bool {
+	claudeCacheMu.Lock()
+	defer claudeCacheMu.Unlock()
+	if !claudeCacheOK {
+		claudeAskMu.Lock()
+		ask := claudeAskAt
+		claudeAskMu.Unlock()
+		if time.Since(ask) < keychainDeniedTTL {
+			return false
+		}
+	}
+	claudeCacheAt = time.Time{}
+	return true
+}
+
 func saveClaudeCredential(loc claudeCredentialLocation, c claudeCredentials) error {
 	if err := writeClaudeCredential(loc, c); err != nil {
 		return err

@@ -121,8 +121,9 @@ type savedLogin struct {
 	// of the agent's accounts is on, the agent staying signed in to it.
 	Paused bool `json:"paused,omitempty"`
 	// Held is the Claude account Claude Code itself was signed in to when
-	// magpie last looked: its saved copy is that very sign-in, which
-	// Claude Code's /logout revokes (claudeLoggedOut).
+	// magpie last looked, or switched it to: its saved copy is that very
+	// sign-in, which Claude Code's /logout revokes (claudeLoggedOut), and
+	// it gets no config directory of its own (claudeSavedDir).
 	Held bool `json:"held,omitempty"`
 	// was is the name a Copilot account read under a new one had in the
 	// file (#1220): its per-account settings are still kept by it, and
@@ -850,6 +851,14 @@ func rememberLogins(force bool) {
 			continue
 		}
 		l, ok := liveLogin(agent)
+		if agent == "claude" && slices.ContainsFunc(was, func(x savedLogin) bool { return x.Agent == "claude" && x.Held && (!ok || !sameLogin(x, l)) }) && forgetClaudeRead() {
+			// the mark moves only on Claude Code's sign-in as it is now: the
+			// read cached here (claudeCacheTTL) can be from before another
+			// magpie's switch, of the account switched from or of none, and
+			// the account that switch handed over would get a directory
+			// again or be marked lapsed (#4750)
+			l, ok = liveLogin(agent)
+		}
 		if agent == "codex" {
 			// Codex's other folders' accounts (phantom3792 on X: only the
 			// default profile's account read a quota)
@@ -1340,6 +1349,18 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 			// Claude Code's own now: its only holder
 			forgetClaudeDir(want.User)
 			claudeHandedOver(want.User)
+			// marked so before loginsMu is let go, so a run queued behind the
+			// switch, in this magpie or another, makes no directory for it
+			// again (claudeSavedDir); rememberLogins moves the mark with
+			// Claude Code's sign-in from then on
+			for i := range ls {
+				if ls[i].Agent == "claude" {
+					ls[i].Held = strings.EqualFold(ls[i].User, want.User)
+				}
+			}
+			if werr := writeLogins(ls); werr != nil {
+				log.Printf("claude: marking %s as Claude Code's own after the switch: %v", want.User, werr)
+			}
 		}
 	default:
 		err = fmt.Errorf("%s accounts can't be switched", agent)

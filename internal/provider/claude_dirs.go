@@ -242,10 +242,15 @@ func readSavedClaudeUsage(ctx context.Context, user string) ([]QuotaWindow, erro
 	return ws, err
 }
 
+// errClaudeHeld is a saved Claude account Claude Code itself is signed in
+// to, as logins.json last has it (Held).
+var errClaudeHeld = errors.New("Claude Code itself is signed in to this account now: it runs on Claude Code's own sign-in, not in a directory of its own")
+
 // claudeSavedDir is the config directory to run Claude Code in for the
 // saved account user: its sign-in is put there from logins.json when there
 // is none yet, and what Claude Code has made of it since is read back. An
-// account that can't be used (claudeSignedOut) gets none.
+// account that can't be used (claudeSignedOut), or that Claude Code is
+// signed in to (Held), gets none.
 func claudeSavedDir(user string) (string, error) {
 	savedTokenMu.Lock()
 	defer savedTokenMu.Unlock()
@@ -260,6 +265,13 @@ func claudeSavedDir(user string) (string, error) {
 	}
 	if i < 0 {
 		return "", fmt.Errorf("no saved claude account %q", user)
+	}
+	if ls[i].Held {
+		// a run asked for just before a switch handed it to Claude Code
+		// (#4750): a directory made now would hold Claude Code's own
+		// refresh token a second time, and a refresh there would leave
+		// Claude Code's copy refused
+		return "", errClaudeHeld
 	}
 	if claudeSetupToken(ls[i].Auth) != "" {
 		// no sign-in to put there: the token goes in Claude Code's
