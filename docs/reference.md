@@ -1915,6 +1915,38 @@ Claude Code, so no turn runs through Claude Code's SDK mode, which
 spends more of the allowance than Claude Code used on its own (myduso on
 Discord). Their usage is still read and shown.
 
+**Claude Code on another of your accounts.** `magpie accounts run claude
+<email|name> [--cwd <dir>] [-- <claude arguments>…]` starts Claude Code on
+a saved Claude account beside the one Claude Code itself is signed in to,
+without switching it: in that account's own folder in magpie, the one its
+Claude subscription runs in, where Claude Code keeps the account's sign-in
+fresh and magpie reads it back when Claude Code exits. What follows `--`
+goes to Claude Code as it is, and magpie exits with Claude Code's exit
+code. Your own Claude Code setup comes along: your `CLAUDE.md`, skills,
+commands, agents and rules are linked into the folder; your
+`settings.json` is copied there without an endpoint, cloud or key in it
+(magpie's gateway address and key, `CLAUDE_CODE_USE_BEDROCK`,
+`CLAUDE_CODE_USE_VERTEX` and the other cloud switches, `ANTHROPIC_API_KEY`,
+`apiKeyHelper`), nor what was written for that endpoint's models (the
+models magpie wrote for the gateway or your Bedrock or Vertex AI setup
+names, the `/model` list, context and compact windows, reply length, auto
+mode review switch and tool search), so Claude Code runs on the account's
+own sign-in with Anthropic's models; the cloud switches are left out of
+the environment it starts in too. Your own MCP servers from
+`~/.claude.json` are added to the folder's `.claude.json`. Your sign-in,
+history, `keybindings.json` and the rest of `~/.claude.json` are never
+brought in. What the folder has of its own is kept as it is, and magpie
+says so: a `settings.json` or MCP server changed in that session is the
+account's from then on, and a server removed there (`claude mcp remove`)
+isn't added back; delete the `settings.json` there to get yours copied
+again. magpie's own runs on the account (its usage, a
+warm-up, a request) don't read any of it. On Windows a link needs
+Developer Mode; magpie says which it couldn't make. An account added by
+a setup-token runs on its token. The account Claude Code is signed in to
+is refused (run `claude` for it). While it runs, don't remove the account
+from magpie or sign in to it again; switching Claude Code to it waits up
+to 90 seconds for it to end and is then refused.
+
 **Switch accounts only.** To use magpie only to switch Claude Code (or
 Codex) between your accounts, leave it not connected on Agents and sign
 your accounts in under Providers › Claude Code. Its row on Agents then

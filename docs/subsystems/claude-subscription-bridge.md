@@ -28,7 +28,12 @@ A run on a saved account shares that account's config directory with a
 Claude Code the user started on it (`magpie accounts run claude`, in
 [Providers and accounts](providers-accounts.md)): one sign-in there, and
 Claude Code's lock in the directory keeps two of them from refreshing it
-at once.
+at once. The user's setup that command brings into the directory
+(`CLAUDE.md`, skills, settings, MCP servers) is read by none of the
+bridge's runs, which pass `--setting-sources ""` and `--strict-mcp-config`;
+`keybindings.json`, which Claude Code reads whatever the setting sources
+and which could change the keys the interactive mode presses, isn't
+brought in.
 
 A run is started with `--dangerously-skip-permissions` (`claudeCLIArgs`):
 its only tools are magpie's MCP ones, answered by the client, and
@@ -59,7 +64,7 @@ to use an http:// proxy. The `settings.json` env that magpie writes for the
 user's own Claude Code sessions leaves a SOCKS proxy out (see
 [Providers and accounts](providers-accounts.md)).
 
-A saved account added by a setup-token (see [Providers and accounts](providers-accounts.md)) has no sign-in in its config directory. `inClaudeDir`, which builds the env of every run in a saved account's directory (a turn's run, the warm-up, `askClaude`, `/usage`), drops any `CLAUDE_CODE_OAUTH_TOKEN` it was given and sets it to `provider.ClaudeDirToken(configDir)` when that directory is a token account's: the token reaches the real Claude Code there and nowhere else, never on its command line, never in a log, and never to Claude Code's own account. magpie asks Anthropic nothing with it; the entrypoint and everything else about the run are as for any account.
+A saved account added by a setup-token (see [Providers and accounts](providers-accounts.md)) has no sign-in in its config directory. `inClaudeDir`, which builds the env of every run in a saved account's directory (a turn's run, the warm-up, `askClaude`, `/usage`), drops any `CLAUDE_CODE_OAUTH_TOKEN` it was given and sets it to `provider.ClaudeDirToken(configDir)` when that directory is a token account's: the token reaches the real Claude Code there and nowhere else, never on its command line, never in a log, and never to Claude Code's own account. magpie asks Anthropic nothing with it; the entrypoint and everything else about the run are as for any account. `magpie accounts run claude` gives the Claude Code it starts on such an account the same token, the same way (`RunClaudeAccount`).
 
 The helper offers each of the client's tools under `bridgeToolName`
 (`bridgeTools`), which Claude Code calls `mcp__magpie__<name>`. Claude Code
