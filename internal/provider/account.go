@@ -696,6 +696,23 @@ func writeClaudeCredential(loc claudeCredentialLocation, c claudeCredentials) er
 	return nil
 }
 
+// removeClaudeCredential takes out the sign-in putClaudeLogin wrote where
+// Claude Code had none.
+func removeClaudeCredential(loc claudeCredentialLocation) error {
+	defer forgetClaudeCredential()
+	if !loc.keychain {
+		return os.Remove(loc.path)
+	}
+	args := []string{"delete-generic-password", "-s", claudeHomeService()}
+	if loc.account != "" {
+		args = append(args, "-a", loc.account)
+	}
+	if out, err := proc.Command("security", args...).CombinedOutput(); err != nil {
+		return fmt.Errorf("remove Claude Code credentials: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 // claudeExecutable finds the claude CLI (proc.FindTool: claude.exe in
 // ~/.local/bin on Windows too, #839), else the one magpie downloaded
 // (claudecode.Find); a var so tests can fake it.
