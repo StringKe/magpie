@@ -923,7 +923,18 @@ func addLogin(l savedLogin) (using bool, err error) {
 	if signedIn && !using {
 		// the current account, as fresh as the agent has it
 		live.Seen = l.Seen
+		live.Held = l.Agent == "claude"
 		ls = upsertLogin(ls, live)
+	}
+	if l.Agent == "claude" && using {
+		// Claude Code's own from now on, which no run of magpie's is given
+		// a directory of its own for (claudeSavedDir, #4750)
+		for i := range ls {
+			if ls[i].Agent == "claude" {
+				ls[i].Held = false
+			}
+		}
+		l.Held = true
 	}
 	// signed in again to an account Codex keeps in another of its folders
 	// (CODEX_HOME=…, charliepu on Discord): the new tokens go there, where

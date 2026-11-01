@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -244,6 +245,191 @@ func TestClaudeSwitchRunHeldAndLeft(t *testing.T) {
 			t.Fatalf("a left lock file kept: %v", err)
 		}
 	})
+}
+
+// #4750: a run queued behind a switch (an inSavedClaudeDir waiting on
+// claudeDirRun, another magpie's run just after) asks for the directory of
+// the account just handed to Claude Code. Before, claudeSavedDir made it
+// again from logins.json: a second holder of the refresh token that is
+// Claude Code's own. The switch marks the account Held in logins.json,
+// which another magpie reads too, and the mark follows Claude Code's
+// sign-in once it is switched off that account outside magpie.
+func TestClaudeSavedDirRefusesTheHandedOverAccount(t *testing.T) {
+	prof, creds := claudeThree(t)
+	old := ClaudeHandedOver
+	t.Cleanup(func() { ClaudeHandedOver = old })
+	ClaudeHandedOver = func(string) {}
+	if _, err := claudeSavedDir("max@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SwitchLogin("claude", "max@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	dir := claudeAccountDir("max@x.com")
+	if got, err := claudeSavedDir("max@x.com"); err == nil {
+		t.Fatalf("a run queued behind the switch got the handed-over account's directory %s", got)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the handed-over account's directory made again: %v", err)
+	}
+	b, err := os.ReadFile(loginsPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls, err := parseLogins(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range ls {
+		if l.Agent == "claude" && l.Held != (l.User == "max@x.com") {
+			t.Errorf("logins.json has %s held %v after the switch to max", l.User, l.Held)
+		}
+	}
+	// another tool signs Claude Code in to the Pro again
+	prof("pro@x.com", "pro@x.com's Organization")
+	creds("pro@x.com", "pro")
+	forgetAccountCaches()
+	rememberLogins(true)
+	if _, err := claudeSavedDir("max@x.com"); err != nil {
+		t.Fatalf("max still refused once Claude Code was moved off it: %v", err)
+	}
+	if _, err := claudeSavedDir("pro@x.com"); err == nil {
+		t.Fatal("the Pro's directory made while Claude Code is signed in to it")
+	}
+}
+
+// The other magpie of #4532 (the app, with `magpie accounts switch` run in
+// a terminal) has Claude Code's sign-in from before the switch cached for
+// up to claudeCacheTTL. Its look in that time took the Pro for Claude
+// Code's own again, moved the mark there in logins.json, and the Max's
+// directory was made again from logins.json for its next run.
+func TestClaudeSwitchHeldPastAnotherMagpiesCache(t *testing.T) {
+	claudeThree(t)
+	old := ClaudeHandedOver
+	t.Cleanup(func() { ClaudeHandedOver = old })
+	ClaudeHandedOver = func(string) {}
+	c, loc, ok := claudeCredential()
+	if !ok {
+		t.Fatal("Claude Code not signed in to the Pro")
+	}
+	if err := SwitchLogin("claude", "max@x.com"); err != nil {
+		t.Fatal(err)
+	}
+	// the other magpie's cache, read before the switch
+	cacheClaudeCredential(c, loc)
+	rememberLogins(true)
+	for _, l := range readLogins() {
+		if l.Agent == "claude" && l.Held != (l.User == "max@x.com") {
+			t.Errorf("after a look on the sign-in cached before the switch, %s held %v", l.User, l.Held)
+		}
+	}
+	if got, err := claudeSavedDir("max@x.com"); err == nil {
+		t.Fatalf("after a look on the sign-in cached before the switch, a run got the handed-over account's directory %s", got)
+	}
+}
+
+// So when Claude Code was signed out before the switch (the app serving a
+// stand-in, `magpie accounts switch claude max` run in a terminal): the
+// other magpie's cached read says no sign-in, and its look took that for
+// a sign-out of the account just handed over, marking it lapsed. A read
+// the Keychain may have refused is still not asked again.
+func TestClaudeSwitchFromSignedOutHeldPastAnotherMagpiesCache(t *testing.T) {
+	switched := func(t *testing.T) {
+		t.Helper()
+		claudeThree(t)
+		old := ClaudeHandedOver
+		t.Cleanup(func() { ClaudeHandedOver = old })
+		ClaudeHandedOver = func(string) {}
+		if err := os.Remove(filepath.Join(os.Getenv("HOME"), ".claude", ".credentials.json")); err != nil {
+			t.Fatal(err)
+		}
+		forgetAccountCaches()
+		rememberLogins(true)
+		for _, l := range readLogins() {
+			if l.Held {
+				t.Fatalf("%s held with Claude Code signed out", l.User)
+			}
+		}
+		if err := SwitchLogin("claude", "max@x.com"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// the other magpie's read, made while Claude Code was signed out
+	cachedMiss := func(asked time.Time) {
+		claudeCacheMu.Lock()
+		claudeCacheC, claudeCacheLoc, claudeCacheOK, claudeCacheAt = claudeCredentials{}, claudeCredentialLocation{}, false, time.Now()
+		claudeCacheMu.Unlock()
+		claudeAskMu.Lock()
+		claudeAskAt = asked
+		claudeAskMu.Unlock()
+	}
+	t.Run("not found", func(t *testing.T) {
+		switched(t)
+		cachedMiss(time.Time{})
+		rememberLogins(true)
+		for _, l := range readLogins() {
+			if l.Agent != "claude" {
+				continue
+			}
+			if l.Held != (l.User == "max@x.com") {
+				t.Errorf("after a look on the signed-out read cached before the switch, %s held %v", l.User, l.Held)
+			}
+			if l.User == "max@x.com" && claudeSignedOut(l) != "" {
+				t.Errorf("after a look on the signed-out read cached before the switch, max@x.com lapsed: %q", claudeSignedOut(l))
+			}
+		}
+		if got, err := claudeSavedDir("max@x.com"); err == nil {
+			t.Fatalf("after a look on the signed-out read cached before the switch, a run got the handed-over account's directory %s", got)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		if runtime.GOOS != "darwin" {
+			t.Skip("the Claude keychain read is a macOS one")
+		}
+		switched(t)
+		asks := fakeSecurityDenied(t)
+		oldKeychain := claudeKeychain
+		claudeKeychain = true
+		t.Cleanup(func() { claudeKeychain = oldKeychain })
+		cachedMiss(time.Now())
+		rememberLogins(true)
+		if n := asks(); n != 0 {
+			t.Fatalf("a Keychain read refused a moment ago was asked again %d times", n)
+		}
+	})
+}
+
+// So for a sign-in (addLogin): signed in again to the account Claude Code
+// is on, that account stays Held, and so does it beside a new account
+// signed in for magpie alone. Before, both writes put Claude Code's own
+// account in logins.json unheld until the next look.
+func TestClaudeSignInKeepsTheLiveAccountHeld(t *testing.T) {
+	claudeThree(t)
+	login := func(tok, email, org string) savedLogin {
+		t.Helper()
+		l, err := claudeLogin(claudeCredentials{OAuth: claudeAuth{AccessToken: "tok-" + tok, RefreshToken: "r-" + tok,
+			ExpiresAt: time.Now().Add(time.Hour).UnixMilli(), SubscriptionType: "pro"}},
+			map[string]any{"emailAddress": email, "organizationUuid": "org-" + email, "organizationName": org})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	if using, err := addLogin(login("pro-again", "pro@x.com", "pro@x.com's Organization")); err != nil || !using {
+		t.Fatalf("signed in again to Claude Code's own account: using %v, %v", using, err)
+	}
+	if _, err := claudeSavedDir("pro@x.com"); err == nil {
+		t.Fatal("Claude Code's own account, signed in again, got a directory of its own")
+	}
+	if using, err := addLogin(login("new", "new@x.com", "new@x.com's Organization")); err != nil || using {
+		t.Fatalf("a new account beside Claude Code's: using %v, %v", using, err)
+	}
+	if _, err := claudeSavedDir("pro@x.com"); err == nil {
+		t.Fatal("Claude Code's own account got a directory of its own after another was signed in")
+	}
+	if _, err := claudeSavedDir("new@x.com"); err != nil {
+		t.Fatalf("the new account has no directory: %v", err)
+	}
 }
 
 // A run in a saved account's directory holds its lock file while it runs,
