@@ -1319,6 +1319,7 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 				claudeHandedOver(want.User)
 				forgetAccountCaches()
 			}
+			markClaudeHeld(ls, want.User)
 			return "", nil
 		}
 		// on it with an older sign-in than magpie's, spent by the refresh
@@ -1349,18 +1350,7 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 			// Claude Code's own now: its only holder
 			forgetClaudeDir(want.User)
 			claudeHandedOver(want.User)
-			// marked so before loginsMu is let go, so a run queued behind the
-			// switch, in this magpie or another, makes no directory for it
-			// again (claudeSavedDir); rememberLogins moves the mark with
-			// Claude Code's sign-in from then on
-			for i := range ls {
-				if ls[i].Agent == "claude" {
-					ls[i].Held = strings.EqualFold(ls[i].User, want.User)
-				}
-			}
-			if werr := writeLogins(ls); werr != nil {
-				log.Printf("claude: marking %s as Claude Code's own after the switch: %v", want.User, werr)
-			}
+			markClaudeHeld(ls, want.User)
 		}
 	default:
 		err = fmt.Errorf("%s accounts can't be switched", agent)
@@ -1371,6 +1361,27 @@ func switchSavedLogin(agent, user string) (from string, _ error) {
 	loginsSeenAt.Store(0)
 	forgetAccountCaches()
 	return from, nil
+}
+
+// markClaudeHeld marks user, the account a switch left Claude Code on, as
+// Claude Code's own in logins.json, before the caller lets loginsMu go: a
+// run queued behind the switch, in this magpie or another, then makes no
+// directory for it again (claudeSavedDir, #4750). rememberLogins moves the
+// mark with Claude Code's sign-in from then on. A failed write is logged,
+// the switch standing: the next look marks it.
+func markClaudeHeld(ls []savedLogin, user string) {
+	changed := false
+	for i := range ls {
+		if ls[i].Agent == "claude" && ls[i].Held != strings.EqualFold(ls[i].User, user) {
+			ls[i].Held, changed = !ls[i].Held, true
+		}
+	}
+	if !changed {
+		return
+	}
+	if err := writeLogins(ls); err != nil {
+		log.Printf("claude: marking %s as Claude Code's own after the switch: %v", user, err)
+	}
 }
 
 // putClaudeLogin signs Claude Code in to l. The caller holds Claude Code's

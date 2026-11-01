@@ -230,6 +230,48 @@ func TestClaudeSwitchToTheAccountOnHandsItsFolderOver(t *testing.T) {
 	}
 }
 
+// #4750 beside #4532's 1.3: a switch to the account Claude Code is on
+// already (another tool put it there before magpie looked, or a switch
+// whose undo failed) removed the account's folder but left Held on the
+// account before, so a run queued behind it made the folder again from
+// logins.json: a second holder of Claude Code's own refresh token.
+func TestClaudeSwitchToTheAccountOnMarksItHeld(t *testing.T) {
+	home, cred := claudeLockAccounts(t)
+	dir, err := claudeSavedDir("a@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the other tool signs Claude Code in to a; magpie hasn't looked since
+	writeFile(t, cred, map[string]any{"claudeAiOauth": map[string]any{"accessToken": "sk-ant-oat01-old", "refreshToken": "sk-ant-ort01-old",
+		"expiresAt": time.Now().Add(time.Hour).UnixMilli(), "subscriptionType": "max"}})
+	writeFile(t, filepath.Join(home, ".claude.json"), map[string]any{"oauthAccount": map[string]any{"emailAddress": "a@example.com", "accountUuid": "u-a"}})
+	forgetClaudeCredential()
+	forgetAccountCaches()
+	if err := SwitchLogin("claude", "a@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the fixture: a's folder kept beside Claude Code's own sign-in: %v", err)
+	}
+	if _, err := claudeSavedDir("a@example.com"); err == nil {
+		t.Fatalf("a run queued behind the switch got the handed-over account's directory again; held: %v", heldClaude())
+	}
+	if h := claudeRTHolders(t, cred, "sk-ant-ort01-old"); !slices.Equal(h, []string{"Claude Code"}) {
+		t.Fatalf("a's refresh token held by %v", h)
+	}
+}
+
+// heldClaude are the saved Claude accounts logins.json marks Held.
+func heldClaude() []string {
+	var held []string
+	for _, l := range readLogins() {
+		if l.Agent == "claude" && l.Held {
+			held = append(held, l.User)
+		}
+	}
+	return held
+}
+
 // StringKe's audit, #4532: another tool switched Claude Code to a and back,
 // and Claude Code refreshed a's sign-in meanwhile: logins.json has the new
 // one, a's folder the one that refresh spent. The folder's was taken over
